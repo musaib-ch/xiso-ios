@@ -7,12 +7,14 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
-      - name: Fetch libxiso engine
+      - name: Fetch engines (libxiso + iso2god-rs)
         run: |
-          git clone --depth 1 https://github.com/Razenko/extract-xiso-gui.git upstream
+          git clone --depth 1 https://github.com/Razenko/extract-xiso-gui.git upstream-xiso
+          git clone https://github.com/iliazeus/iso2god-rs.git upstream-god
+          git -C upstream-god checkout 76207d7d7f89f551c7a5769560c0073e9ffe50e9
           mkdir -p Sources/CXiso
-          cp upstream/src/libxiso.c upstream/src/libxiso.h upstream/src/xiso_internal.h Sources/CXiso/
-          cp upstream/LICENSE.TXT LICENSE-extract-xiso.TXT
+          cp upstream-xiso/src/libxiso.c upstream-xiso/src/libxiso.h upstream-xiso/src/xiso_internal.h Sources/CXiso/
+          cp upstream-xiso/LICENSE.TXT LICENSE-extract-xiso.TXT
       - name: Write app files
         run: |
           cat > project.yml <<'XISO_EOF'
@@ -35,6 +37,8 @@ jobs:
                   SWIFT_VERSION: "5.9"
                   SWIFT_OBJC_BRIDGING_HEADER: Sources/CXiso/XisoBridge.h
                   HEADER_SEARCH_PATHS: "$(SRCROOT)/Sources/CXiso"
+                  LIBRARY_SEARCH_PATHS: "$(SRCROOT)/godffi/target/aarch64-apple-ios/release"
+                  OTHER_LDFLAGS: "-lxisogod"
                   GCC_C_LANGUAGE_STANDARD: gnu11
                   GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) __DARWIN__=1 _FILE_OFFSET_BITS=64"
                   GCC_WARN_INHIBIT_ALL_WARNINGS: YES
@@ -71,6 +75,16 @@ jobs:
               Unmanaged<XisoEngine>.fromOpaque(ud).takeUnretainedValue().onLog(String(cString: msg), err != 0)
           }
 
+          private let godLogCB: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = { msg, ud in
+              guard let ud = ud, let msg = msg else { return }
+              Unmanaged<XisoEngine>.fromOpaque(ud).takeUnretainedValue().onLog(String(cString: msg), false)
+          }
+
+          private let godProgressCB: @convention(c) (UInt64, UInt64, UnsafeMutableRawPointer?) -> Void = { cur, total, ud in
+              guard let ud = ud else { return }
+              Unmanaged<XisoEngine>.fromOpaque(ud).takeUnretainedValue().onProgress(Int64(cur), Int64(total))
+          }
+
           /// libxiso uses chdir() internally (process-wide), so operations are strictly serialized.
           final class XisoEngine: ObservableObject {
               @Published var busy = false
@@ -99,7 +113,7 @@ jobs:
                   }
               }
 
-              func cancel() { if let c = ctx { xiso_cancel(c) } }
+              func cancel() { if let c = ctx { xiso_cancel(c) }; xgod_cancel() }
 
               private func run(_ title: String, scoped: [URL], _ work: @escaping (OpaquePointer) -> Int32) {
                   guard !busy else { return }
@@ -121,8 +135,10 @@ jobs:
                           self.busy = false
                           self.progress = rc == 0 ? 1 : self.progress
                           self.status = rc == 0
-                              ? "\(title) finished — \(files) files, \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))"
-                              : "\(title) failed (code \(rc))"
+                              ? (files > 0
+                                  ? "\(title) finished — \(files) files, \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))"
+                                  : "\(title) finished")
+                              : (rc == 2 ? "\(title) cancelled" : "\(title) failed (code \(rc)) — see log")
                       }
                   }
               }
@@ -148,6 +164,18 @@ jobs:
                               return d.path.withCString { dd in xiso_rewrite(c, i, dd, deleteOld) }
                           }
                           return xiso_rewrite(c, i, nil, deleteOld)
+                      }
+                  }
+              }
+
+              /// ISO -> Games on Demand package (Xbox 360 / Xbox), via iso2god-rs.
+              func toGOD(iso: URL, dest: URL, trim: Bool) {
+                  run("Convert to GOD", scoped: [iso, dest]) { _ in
+                      let me = Unmanaged.passUnretained(self).toOpaque()
+                      return iso.path.withCString { i in
+                          dest.path.withCString { d in
+                              xgod_convert(i, d, trim, 2, godLogCB, godProgressCB, me)
+                          }
                       }
                   }
               }
@@ -201,6 +229,7 @@ jobs:
                           CreateView().tabItem { Label("Create", systemImage: "shippingbox") }
                           ListView().tabItem { Label("List", systemImage: "list.bullet.indent") }
                           RewriteView().tabItem { Label("Rewrite", systemImage: "arrow.triangle.2.circlepath") }
+                          GodView().tabItem { Label("GOD", systemImage: "externaldrive") }
                       }
                       StatusBar()
                   }
@@ -266,6 +295,8 @@ jobs:
                           PickRow(label: "ISO", types: [.data], url: $iso)
                           PickRow(label: "Destination", types: [.folder], url: $dest)
                           Toggle("Skip $SystemUpdate", isOn: $skip)
+                          Text("Xbox 360 discs: the extracted folder contains default.xex — open that in Xenia.")
+                              .font(.footnote).foregroundStyle(.secondary)
                           Button("Extract") { if let i = iso, let d = dest { engine.extract(iso: i, dest: d, skipSystemUpdate: skip) } }
                               .disabled(iso == nil || dest == nil || engine.busy)
                       }.navigationTitle("Extract")
@@ -335,16 +366,293 @@ jobs:
                   }
               }
           }
+
+          struct GodView: View {
+              @EnvironmentObject var engine: XisoEngine
+              @State private var iso: URL?
+              @State private var dest: URL?
+              @State private var trim = true
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          PickRow(label: "ISO", types: [.data], url: $iso)
+                          PickRow(label: "Output folder", types: [.folder], url: $dest)
+                          Toggle("Trim unused space", isOn: $trim)
+                          Text("Creates a Games on Demand package (TitleID/00007000/…) from an Xbox 360 ISO. Needs free space roughly equal to the ISO.")
+                              .font(.footnote).foregroundStyle(.secondary)
+                          Button("Convert to GOD") { if let i = iso, let d = dest { engine.toGOD(iso: i, dest: d, trim: trim) } }
+                              .disabled(iso == nil || dest == nil || engine.busy)
+                      }.navigationTitle("ISO → GOD")
+                  }
+              }
+          }
           XISO_EOF
           mkdir -p Sources/CXiso
           cat > Sources/CXiso/XisoBridge.h <<'XISO_EOF'
           #include "libxiso.h"
+          #include "xisogod.h"
           XISO_EOF
+          mkdir -p Sources/CXiso
+          cat > Sources/CXiso/xisogod.h <<'XISO_EOF'
+          #ifndef XISOGOD_H
+          #define XISOGOD_H
+          #include <stdint.h>
+          #include <stdbool.h>
+          typedef void (*xgod_log_cb)(const char *msg, void *user);
+          typedef void (*xgod_progress_cb)(uint64_t current, uint64_t total, void *user);
+          /* 0 = ok, 1 = error (message via log cb), 2 = cancelled */
+          int  xgod_convert(const char *iso_path, const char *dest_dir, bool trim_from_end, int threads,
+                            xgod_log_cb log, xgod_progress_cb progress, void *user);
+          void xgod_cancel(void);
+          #endif
+          XISO_EOF
+          mkdir -p godffi
+          cat > godffi/Cargo.toml <<'XISO_EOF'
+          [package]
+          name = "xisogod"
+          version = "0.1.0"
+          edition = "2021"
+
+          [lib]
+          crate-type = ["staticlib", "rlib"]
+
+          [dependencies]
+          iso2god = { path = "../upstream-god" }
+          anyhow = "1"
+          rayon = "1.10"
+
+          [profile.release]
+          opt-level = 3
+          lto = true
+          strip = true
+          XISO_EOF
+          mkdir -p godffi/src
+          cat > godffi/src/lib.rs <<'XISO_EOF'
+          //! C-ABI wrapper around iso2god-rs (Xbox 360 / Xbox ISO -> Games on Demand).
+          //! Logic mirrors iso2god's CLI (src/bin/iso2god.rs) so output is identical.
+          use std::ffi::{c_char, c_int, c_void, CStr, CString};
+          use std::fs::{self, File};
+          use std::io::{Seek, SeekFrom, Write};
+          use std::path::Path;
+          use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+          use anyhow::{anyhow, Context, Error};
+          use rayon::prelude::*;
+
+          use iso2god::executable::TitleInfo;
+          use iso2god::god::ContentType;
+          use iso2god::{game_list, god, iso};
+
+          pub type LogCb = extern "C" fn(msg: *const c_char, user: *mut c_void);
+          pub type ProgressCb = extern "C" fn(current: u64, total: u64, user: *mut c_void);
+
+          static CANCEL: AtomicBool = AtomicBool::new(false);
+
+          #[derive(Clone, Copy)]
+          struct User(*mut c_void);
+          unsafe impl Send for User {}
+          unsafe impl Sync for User {}
+
+          #[derive(Clone, Copy)]
+          struct Sink {
+              log: Option<LogCb>,
+              progress: Option<ProgressCb>,
+              user: User,
+          }
+
+          impl Sink {
+              fn log(&self, s: &str) {
+                  if let Some(cb) = self.log {
+                      if let Ok(c) = CString::new(s.replace('\0', " ")) {
+                          cb(c.as_ptr(), self.user.0);
+                      }
+                  }
+              }
+              fn progress(&self, cur: u64, total: u64) {
+                  if let Some(cb) = self.progress {
+                      cb(cur, total, self.user.0);
+                  }
+              }
+          }
+
+          /// Request cancellation of a running xgod_convert (from any thread).
+          #[no_mangle]
+          pub extern "C" fn xgod_cancel() {
+              CANCEL.store(true, Ordering::SeqCst);
+          }
+
+          /// Convert an ISO to a GOD package inside dest_dir.
+          /// Returns 0 = ok, 1 = error (message sent to log callback), 2 = cancelled.
+          #[no_mangle]
+          pub extern "C" fn xgod_convert(
+              iso_path: *const c_char,
+              dest_dir: *const c_char,
+              trim_from_end: bool,
+              threads: c_int,
+              log: Option<LogCb>,
+              progress: Option<ProgressCb>,
+              user: *mut c_void,
+          ) -> c_int {
+              let sink = Sink { log, progress, user: User(user) };
+              if iso_path.is_null() || dest_dir.is_null() {
+                  sink.log("invalid arguments");
+                  return 1;
+              }
+              let (iso, dest) = unsafe {
+                  (
+                      CStr::from_ptr(iso_path).to_string_lossy().into_owned(),
+                      CStr::from_ptr(dest_dir).to_string_lossy().into_owned(),
+                  )
+              };
+              CANCEL.store(false, Ordering::SeqCst);
+
+              let n = threads.max(1) as usize;
+              let result = rayon::ThreadPoolBuilder::new()
+                  .num_threads(n)
+                  .build()
+                  .map_err(Error::from)
+                  .and_then(|pool| pool.install(|| convert(Path::new(&iso), Path::new(&dest), trim_from_end, &sink)));
+
+              match result {
+                  Ok(()) => 0,
+                  Err(e) => {
+                      if CANCEL.load(Ordering::SeqCst) {
+                          sink.log("cancelled");
+                          2
+                      } else {
+                          sink.log(&format!("ERROR: {:#}", e));
+                          1
+                      }
+                  }
+              }
+          }
+
+          fn convert(src: &Path, dest: &Path, trim_from_end: bool, sink: &Sink) -> Result<(), Error> {
+              sink.log("reading ISO metadata");
+
+              let source_iso_file = File::open(src).context("error opening source ISO file")?;
+              let source_len = fs::metadata(src).context("error reading source ISO file metadata")?.len();
+              let mut source_iso = iso::IsoReader::read(source_iso_file).context("error reading source ISO")?;
+
+              let title_info = TitleInfo::from_image(&mut source_iso).context("error reading image executable")?;
+              let exe_info = title_info.execution_info;
+              let content_type = title_info.content_type;
+
+              let name = game_list::find_title_by_id(exe_info.title_id);
+              sink.log(&format!("Title ID: {:08X}", exe_info.title_id));
+              sink.log(&format!("Name: {}", name.clone().unwrap_or_else(|| "(unknown)".to_owned())));
+              sink.log(match content_type {
+                  ContentType::GamesOnDemand => "Type: Xbox 360 (Games on Demand)",
+                  ContentType::XboxOriginal => "Type: Original Xbox",
+              });
+
+              let data_size = if trim_from_end {
+                  source_iso.get_max_used_prefix_size()
+              } else {
+                  source_len - source_iso.volume_descriptor.root_offset
+              };
+              let block_count = data_size.div_ceil(god::BLOCK_SIZE);
+              let part_count = block_count.div_ceil(god::BLOCKS_PER_PART);
+              if part_count == 0 {
+                  return Err(anyhow!("ISO contains no data"));
+              }
+
+              let file_layout = god::FileLayout::new(dest, &exe_info, content_type);
+
+              sink.log("clearing data directory");
+              {
+                  let p = file_layout.data_dir_path();
+                  if fs::exists(&p)? {
+                      fs::remove_dir_all(&p)?;
+                  }
+                  fs::create_dir_all(&p)?;
+              }
+
+              sink.log(&format!("writing {part_count} part file(s)"));
+              let done = AtomicUsize::new(0);
+              let root_offset = source_iso.volume_descriptor.root_offset;
+
+              (0..part_count).into_par_iter().try_for_each(|part_index| {
+                  if CANCEL.load(Ordering::SeqCst) {
+                      return Err(anyhow!("cancelled"));
+                  }
+                  let mut vol = File::open(src)?;
+                  vol.seek(SeekFrom::Start(root_offset))?;
+                  let part_file = File::options()
+                      .write(true)
+                      .create(true)
+                      .truncate(true)
+                      .open(file_layout.part_file_path(part_index))
+                      .context("error creating part file")?;
+                  god::write_part(vol, part_index, part_file).context("error writing part file")?;
+                  let cur = 1 + done.fetch_add(1, Ordering::Relaxed);
+                  sink.progress(cur as u64, part_count);
+                  sink.log(&format!("part {cur}/{part_count}"));
+                  Ok::<_, Error>(())
+              })?;
+
+              sink.log("calculating MHT hash chain");
+              let mut mht = read_mht(&file_layout, part_count - 1)?;
+              for prev in (0..part_count - 1).rev() {
+                  let mut prev_mht = read_mht(&file_layout, prev)?;
+                  prev_mht.add_hash(&mht.digest());
+                  write_mht(&file_layout, prev, &prev_mht)?;
+                  mht = prev_mht;
+              }
+
+              let last_part_size = fs::metadata(file_layout.part_file_path(part_count - 1))
+                  .map(|m| m.len())
+                  .context("error reading part file")?;
+
+              sink.log("writing CON header");
+              let mut con = god::ConHeaderBuilder::new()
+                  .with_execution_info(&exe_info)
+                  .with_block_counts(block_count as u32, 0)
+                  .with_data_parts_info(
+                      part_count as u32,
+                      last_part_size + (part_count - 1) * god::BLOCK_SIZE * 0xa290,
+                  )
+                  .with_content_type(content_type)
+                  .with_mht_hash(&mht.digest());
+              if let Some(t) = name {
+                  con = con.with_game_title(&t);
+              }
+              let con = con.finalize();
+
+              File::options()
+                  .write(true)
+                  .create(true)
+                  .truncate(true)
+                  .open(file_layout.con_header_file_path())
+                  .context("cannot open con header file")?
+                  .write_all(&con)
+                  .context("error writing con header file")?;
+
+              sink.log("done");
+              Ok(())
+          }
+
+          fn read_mht(fl: &god::FileLayout, idx: u64) -> Result<god::HashList, Error> {
+              let mut f = File::options().read(true).open(fl.part_file_path(idx))?;
+              god::HashList::read(&mut f)
+          }
+
+          fn write_mht(fl: &god::FileLayout, idx: u64, mht: &god::HashList) -> Result<(), Error> {
+              let mut f = File::options().write(true).open(fl.part_file_path(idx))?;
+              mht.write(&mut f)?;
+              Ok(())
+          }
+          XISO_EOF
+      - name: Build GOD converter (Rust, iOS)
+        run: |
+          rustup toolchain install stable --profile minimal --target aarch64-apple-ios
+          rustup default stable
+          cargo build --release --target aarch64-apple-ios --manifest-path godffi/Cargo.toml
       - name: Install XcodeGen and generate project
         run: |
           brew install xcodegen
           xcodegen generate
-      - name: Build (no signing)
+      - name: Build app (no signing)
         run: |
           xcodebuild -project XisoGUI.xcodeproj -scheme XisoGUI \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
