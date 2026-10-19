@@ -1,0 +1,362 @@
+name: Build iOS (unsigned IPA)
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-latest
+    steps:
+      - name: Fetch libxiso engine
+        run: |
+          git clone --depth 1 https://github.com/Razenko/extract-xiso-gui.git upstream
+          mkdir -p Sources/CXiso
+          cp upstream/src/libxiso.c upstream/src/libxiso.h upstream/src/xiso_internal.h Sources/CXiso/
+          cp upstream/LICENSE.TXT LICENSE-extract-xiso.TXT
+      - name: Write app files
+        run: |
+          cat > project.yml <<'XISO_EOF'
+          name: XisoGUI
+          options:
+            bundleIdPrefix: dev.xiso
+            deploymentTarget:
+              iOS: "16.0"
+          targets:
+            XisoGUI:
+              type: application
+              platform: iOS
+              sources:
+                - path: Sources
+              settings:
+                base:
+                  PRODUCT_BUNDLE_IDENTIFIER: dev.xiso.gui
+                  MARKETING_VERSION: "1.0.0"
+                  CURRENT_PROJECT_VERSION: "1"
+                  SWIFT_VERSION: "5.9"
+                  SWIFT_OBJC_BRIDGING_HEADER: Sources/CXiso/XisoBridge.h
+                  HEADER_SEARCH_PATHS: "$(SRCROOT)/Sources/CXiso"
+                  GCC_C_LANGUAGE_STANDARD: gnu11
+                  GCC_PREPROCESSOR_DEFINITIONS: "$(inherited) __DARWIN__=1 _FILE_OFFSET_BITS=64"
+                  GCC_WARN_INHIBIT_ALL_WARNINGS: YES
+                  TARGETED_DEVICE_FAMILY: "1,2"
+                  CODE_SIGNING_ALLOWED: NO
+                  CODE_SIGN_IDENTITY: ""
+                  GENERATE_INFOPLIST_FILE: YES
+                  INFOPLIST_KEY_CFBundleDisplayName: "XISO GUI"
+                  INFOPLIST_KEY_UILaunchScreen_Generation: YES
+                  INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+                  INFOPLIST_KEY_UIFileSharingEnabled: YES
+                  INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: YES
+          XISO_EOF
+          mkdir -p Sources
+          cat > Sources/XisoEngine.swift <<'XISO_EOF'
+          import Foundation
+          import SwiftUI
+
+          struct XisoNode: Identifiable {
+              let id = UUID()
+              let name: String
+              let size: UInt32
+              let isDir: Bool
+              var children: [XisoNode]?
+          }
+
+          private let progressCB: @convention(c) (Int64, Int64, UnsafeMutableRawPointer?) -> Void = { cur, total, ud in
+              guard let ud = ud else { return }
+              Unmanaged<XisoEngine>.fromOpaque(ud).takeUnretainedValue().onProgress(cur, total)
+          }
+
+          private let logCB: @convention(c) (UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?) -> Void = { msg, err, ud in
+              guard let ud = ud, let msg = msg else { return }
+              Unmanaged<XisoEngine>.fromOpaque(ud).takeUnretainedValue().onLog(String(cString: msg), err != 0)
+          }
+
+          /// libxiso uses chdir() internally (process-wide), so operations are strictly serialized.
+          final class XisoEngine: ObservableObject {
+              @Published var busy = false
+              @Published var progress: Double = 0
+              @Published var status = "Idle"
+              @Published var log: [String] = []
+              @Published var tree: [XisoNode] = []
+
+              private let queue = DispatchQueue(label: "xiso.engine")
+              private var ctx: OpaquePointer?
+              private var lastTick = Date.distantPast
+
+              fileprivate func onProgress(_ cur: Int64, _ total: Int64) {
+                  let now = Date()
+                  guard now.timeIntervalSince(lastTick) > 0.1 else { return }
+                  lastTick = now
+                  let p = total > 0 ? Double(cur) / Double(total) : 0
+                  DispatchQueue.main.async { self.progress = min(max(p, 0), 1) }
+              }
+
+              fileprivate func onLog(_ line: String, _ isError: Bool) {
+                  let text = (isError ? "ERROR: " : "") + line.trimmingCharacters(in: .whitespacesAndNewlines)
+                  DispatchQueue.main.async {
+                      self.log.append(text)
+                      if self.log.count > 2000 { self.log.removeFirst(self.log.count - 2000) }
+                  }
+              }
+
+              func cancel() { if let c = ctx { xiso_cancel(c) } }
+
+              private func run(_ title: String, scoped: [URL], _ work: @escaping (OpaquePointer) -> Int32) {
+                  guard !busy else { return }
+                  busy = true; progress = 0; status = title + "…"; log = []
+                  let accessed = scoped.filter { $0.startAccessingSecurityScopedResource() }
+                  queue.async {
+                      let c = xiso_context_create()!
+                      self.ctx = c
+                      let me = Unmanaged.passUnretained(self).toOpaque()
+                      xiso_set_progress_callback(c, progressCB, me)
+                      xiso_set_log_callback(c, logCB, me)
+                      let rc = work(c)
+                      let files = xiso_get_total_files(c)
+                      let bytes = xiso_get_total_bytes(c)
+                      self.ctx = nil
+                      xiso_context_free(c)
+                      accessed.forEach { $0.stopAccessingSecurityScopedResource() }
+                      DispatchQueue.main.async {
+                          self.busy = false
+                          self.progress = rc == 0 ? 1 : self.progress
+                          self.status = rc == 0
+                              ? "\(title) finished — \(files) files, \(ByteCountFormatter.string(fromByteCount: Int64(bytes), countStyle: .file))"
+                              : "\(title) failed (code \(rc))"
+                      }
+                  }
+              }
+
+              func extract(iso: URL, dest: URL, skipSystemUpdate: Bool) {
+                  run("Extract", scoped: [iso, dest]) { c in
+                      xiso_set_skip_systemupdate(c, skipSystemUpdate)
+                      return iso.path.withCString { i in dest.path.withCString { d in xiso_extract(c, i, d) } }
+                  }
+              }
+
+              func create(src: URL, outISO: URL, mediaEnable: Bool) {
+                  run("Create", scoped: [src, outISO.deletingLastPathComponent()]) { c in
+                      xiso_set_media_enable(c, mediaEnable)
+                      return src.path.withCString { s in outISO.path.withCString { o in xiso_create(c, s, o) } }
+                  }
+              }
+
+              func rewrite(iso: URL, dest: URL?, deleteOld: Bool) {
+                  run("Rewrite", scoped: [iso] + (dest.map { [$0] } ?? [])) { c in
+                      iso.path.withCString { i in
+                          if let d = dest {
+                              return d.path.withCString { dd in xiso_rewrite(c, i, dd, deleteOld) }
+                          }
+                          return xiso_rewrite(c, i, nil, deleteOld)
+                      }
+                  }
+              }
+
+              func list(iso: URL) {
+                  run("List", scoped: [iso]) { c in
+                      var root: UnsafeMutablePointer<xiso_file_node>? = nil
+                      let rc = iso.path.withCString { xiso_list(c, $0, &root) }
+                      let nodes = Self.build(root)
+                      if root != nil { xiso_free_file_tree(root) }
+                      DispatchQueue.main.async { self.tree = nodes }
+                      return rc
+                  }
+              }
+
+              private static func build(_ p: UnsafeMutablePointer<xiso_file_node>?) -> [XisoNode] {
+                  var out: [XisoNode] = []
+                  var cur = p
+                  while let n = cur {
+                      let v = n.pointee
+                      out.append(XisoNode(
+                          name: v.filename != nil ? String(cString: v.filename) : "?",
+                          size: v.file_size,
+                          isDir: v.is_directory,
+                          children: v.is_directory ? build(v.subdir) : nil))
+                      cur = v.next
+                  }
+                  return out
+              }
+          }
+          XISO_EOF
+          mkdir -p Sources
+          cat > Sources/XisoApp.swift <<'XISO_EOF'
+          import SwiftUI
+          import UniformTypeIdentifiers
+
+          @main
+          struct XisoApp: App {
+              @StateObject private var engine = XisoEngine()
+              var body: some Scene {
+                  WindowGroup { RootView().environmentObject(engine) }
+              }
+          }
+
+          struct RootView: View {
+              @EnvironmentObject var engine: XisoEngine
+              var body: some View {
+                  VStack(spacing: 0) {
+                      TabView {
+                          ExtractView().tabItem { Label("Extract", systemImage: "square.and.arrow.down") }
+                          CreateView().tabItem { Label("Create", systemImage: "shippingbox") }
+                          ListView().tabItem { Label("List", systemImage: "list.bullet.indent") }
+                          RewriteView().tabItem { Label("Rewrite", systemImage: "arrow.triangle.2.circlepath") }
+                      }
+                      StatusBar()
+                  }
+              }
+          }
+
+          struct StatusBar: View {
+              @EnvironmentObject var engine: XisoEngine
+              var body: some View {
+                  VStack(alignment: .leading, spacing: 6) {
+                      ProgressView(value: engine.progress)
+                      HStack {
+                          Text(engine.status).font(.footnote).lineLimit(2)
+                          Spacer()
+                          if engine.busy { Button("Cancel", role: .destructive) { engine.cancel() }.font(.footnote) }
+                      }
+                      if !engine.log.isEmpty {
+                          ScrollViewReader { proxy in
+                              ScrollView {
+                                  LazyVStack(alignment: .leading, spacing: 2) {
+                                      ForEach(Array(engine.log.enumerated()), id: \.offset) { i, l in
+                                          Text(l).font(.system(size: 11, design: .monospaced)).id(i)
+                                      }
+                                  }.frame(maxWidth: .infinity, alignment: .leading)
+                              }
+                              .frame(height: 90)
+                              .onChange(of: engine.log.count) { n in proxy.scrollTo(n - 1, anchor: .bottom) }
+                          }
+                      }
+                  }
+                  .padding(10)
+                  .background(.bar)
+              }
+          }
+
+          struct PickRow: View {
+              let label: String
+              let types: [UTType]
+              @Binding var url: URL?
+              @State private var show = false
+              var body: some View {
+                  Button { show = true } label: {
+                      HStack {
+                          Text(label).foregroundStyle(.primary)
+                          Spacer()
+                          Text(url?.lastPathComponent ?? "Choose…").foregroundStyle(.secondary).lineLimit(1)
+                      }
+                  }
+                  .fileImporter(isPresented: $show, allowedContentTypes: types) { r in
+                      if case .success(let u) = r { url = u }
+                  }
+              }
+          }
+
+          struct ExtractView: View {
+              @EnvironmentObject var engine: XisoEngine
+              @State private var iso: URL?
+              @State private var dest: URL?
+              @State private var skip = false
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          PickRow(label: "ISO", types: [.data], url: $iso)
+                          PickRow(label: "Destination", types: [.folder], url: $dest)
+                          Toggle("Skip $SystemUpdate", isOn: $skip)
+                          Button("Extract") { if let i = iso, let d = dest { engine.extract(iso: i, dest: d, skipSystemUpdate: skip) } }
+                              .disabled(iso == nil || dest == nil || engine.busy)
+                      }.navigationTitle("Extract")
+                  }
+              }
+          }
+
+          struct CreateView: View {
+              @EnvironmentObject var engine: XisoEngine
+              @State private var src: URL?
+              @State private var outDir: URL?
+              @State private var name = "game.iso"
+              @State private var media = true
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          PickRow(label: "Source folder", types: [.folder], url: $src)
+                          PickRow(label: "Output folder", types: [.folder], url: $outDir)
+                          TextField("Output name", text: $name).autocorrectionDisabled().textInputAutocapitalization(.never)
+                          Toggle("Media-enable patch", isOn: $media)
+                          Button("Create") {
+                              if let s = src, let o = outDir { engine.create(src: s, outISO: o.appendingPathComponent(name), mediaEnable: media) }
+                          }.disabled(src == nil || outDir == nil || name.isEmpty || engine.busy)
+                      }.navigationTitle("Create")
+                  }
+              }
+          }
+
+          struct ListView: View {
+              @EnvironmentObject var engine: XisoEngine
+              @State private var iso: URL?
+              var body: some View {
+                  NavigationStack {
+                      VStack {
+                          Form {
+                              PickRow(label: "ISO", types: [.data], url: $iso)
+                              Button("List contents") { if let i = iso { engine.list(iso: i) } }
+                                  .disabled(iso == nil || engine.busy)
+                          }.frame(height: 150)
+                          List(engine.tree, children: \.children) { n in
+                              HStack {
+                                  Image(systemName: n.isDir ? "folder" : "doc")
+                                  Text(n.name)
+                                  Spacer()
+                                  if !n.isDir { Text(ByteCountFormatter.string(fromByteCount: Int64(n.size), countStyle: .file)).foregroundStyle(.secondary).font(.caption) }
+                              }
+                          }
+                      }.navigationTitle("List")
+                  }
+              }
+          }
+
+          struct RewriteView: View {
+              @EnvironmentObject var engine: XisoEngine
+              @State private var iso: URL?
+              @State private var dest: URL?
+              @State private var del = false
+              var body: some View {
+                  NavigationStack {
+                      Form {
+                          PickRow(label: "ISO", types: [.data], url: $iso)
+                          PickRow(label: "Output folder (optional)", types: [.folder], url: $dest)
+                          Toggle("Delete original after rewrite", isOn: $del)
+                          Button("Rewrite") { if let i = iso { engine.rewrite(iso: i, dest: dest, deleteOld: del) } }
+                              .disabled(iso == nil || engine.busy)
+                      }.navigationTitle("Rewrite")
+                  }
+              }
+          }
+          XISO_EOF
+          mkdir -p Sources/CXiso
+          cat > Sources/CXiso/XisoBridge.h <<'XISO_EOF'
+          #include "libxiso.h"
+          XISO_EOF
+      - name: Install XcodeGen and generate project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+      - name: Build (no signing)
+        run: |
+          xcodebuild -project XisoGUI.xcodeproj -scheme XisoGUI \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build | tail -n 60
+      - name: Package IPA
+        run: |
+          mkdir Payload
+          cp -R build/Build/Products/Release-iphoneos/XisoGUI.app Payload/
+          zip -qry XisoGUI.ipa Payload
+      - uses: actions/upload-artifact@v4
+        with:
+          name: XisoGUI-ipa
+          path: XisoGUI.ipa
