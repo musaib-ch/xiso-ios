@@ -674,10 +674,20 @@ jobs:
           test -s "$APP/XisoGUI" || { echo "ERROR: app executable is missing or empty"; exit 1; }
           echo "Built app bundle size:"
           du -sh "$APP"
-          mkdir Payload
+          rm -rf Payload XisoGUI.ipa
+          mkdir -p Payload
           cp -R "$APP" Payload/
           zip -qry XisoGUI.ipa Payload
-          test "$(stat -f%z XisoGUI.ipa)" -gt 1000000 || { echo "ERROR: packaged IPA is suspiciously small"; ls -l XisoGUI.ipa; exit 1; }
+
+          echo "Checking IPA archive integrity..."
+          unzip -t XisoGUI.ipa
+
+          echo "Checking required app files..."
+          unzip -Z1 XisoGUI.ipa | grep -Fx "Payload/XisoGUI.app/XisoGUI"
+          unzip -Z1 XisoGUI.ipa | grep -Fx "Payload/XisoGUI.app/Info.plist"
+
+          echo "Packaged IPA size:"
+          ls -lh XisoGUI.ipa
           unzip -l XisoGUI.ipa | head -n 30
       - uses: actions/upload-artifact@v4
         with:
