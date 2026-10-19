@@ -7,6 +7,8 @@ jobs:
   build:
     runs-on: macos-latest
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
       - name: Fetch engines (libxiso + iso2god-rs)
         run: |
           git clone --depth 1 https://github.com/Razenko/extract-xiso-gui.git upstream-xiso
