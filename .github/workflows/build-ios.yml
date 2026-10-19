@@ -225,14 +225,15 @@ jobs:
               var body: some View {
                   VStack(spacing: 0) {
                       TabView {
-                          ExtractView().tabItem { Label("Extract", systemImage: "square.and.arrow.down") }
-                          CreateView().tabItem { Label("Create", systemImage: "shippingbox") }
-                          ListView().tabItem { Label("List", systemImage: "list.bullet.indent") }
-                          RewriteView().tabItem { Label("Rewrite", systemImage: "arrow.triangle.2.circlepath") }
-                          GodView().tabItem { Label("GOD", systemImage: "externaldrive") }
+                          DashboardView().tabItem { Label("Home", systemImage: "opticaldisc") }
+                          FilesLibraryView().tabItem { Label("Files", systemImage: "folder") }
+                          ActivityLibraryView().tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }
+                          SettingsLibraryView().tabItem { Label("Settings", systemImage: "gearshape") }
                       }
                       StatusBar()
                   }
+                  .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
+                  .preferredColorScheme(.dark)
               }
           }
 
