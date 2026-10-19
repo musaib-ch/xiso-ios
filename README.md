@@ -1,43 +1,27 @@
 # XISO Studio for iOS
 
-A native SwiftUI interface scaffold based on the XISO Studio Stitch design.
+XISO Studio is a native SwiftUI interface for the existing XISO engine build in this repository. The dashboard is based on the supplied Google Stitch design.
 
-## Current status
+## Features in the current build
 
-This repository now contains the first native iOS UI scaffold and a GitHub Actions simulator build workflow.
-
-- Home dashboard with Extract, Create, List, and Rewrite operation cards.
-- Files tab using the iOS document picker.
-- Activity and Settings tabs.
-- Dark appearance with Xbox-inspired green accents.
-- GitHub Actions workflow that generates an Xcode project using XcodeGen, builds for the iOS Simulator, and uploads a ZIP artifact.
-
-**Important:** The XISO processing engine is not integrated yet. The operation screens are interface scaffolding only. This build does not yet extract, create, list, or rewrite ISO/XISO data. Device storage figures and sample job statuses from the original HTML mockup are intentionally not represented as real data.
+- Home dashboard with Extract, Create, List, Rewrite, and Convert to GOD operations.
+- Files tab for browsing through the iOS document picker.
+- Activity tab showing the current operation, progress, cancellation, and engine logs.
+- Settings tab with file safety information.
+- Dark theme with Xbox-inspired green accents.
+- Existing GitHub Actions workflow builds an unsigned iOS app package.
 
 ## Build with GitHub Actions
 
 1. Open the repository's **Actions** tab.
-2. Select **iOS Build**.
-3. Choose **Run workflow**, or push a commit to `main`.
-4. When the workflow succeeds, open its run and download the `XISOStudio-iOS-Simulator` artifact.
+2. Select **Build iOS (unsigned IPA)**.
+3. Choose **Run workflow**, or push a commit to the repository.
+4. Open the completed workflow run and download the **XisoGUI-ipa** artifact.
 
-The artifact is an iOS Simulator app bundle, not a signed IPA for installation on a physical iPhone.
+The generated IPA is unsigned. It is not directly installable through normal iOS installation until it is signed using a suitable certificate and provisioning profile.
 
-## Local build on macOS
+## Implementation notes
 
-Install Xcode and XcodeGen, then run:
+The workflow fetches the upstream XISO engine sources and the pinned `iso2god-rs` source, generates the Xcode project with XcodeGen, and builds the iOS app. The Stitch-inspired dashboard is stored in `Sources/StudioDashboard.swift`; the workflow-generated app entry point routes the Home, Files, Activity, and Settings tabs to those views.
 
-```sh
-brew install xcodegen
-xcodegen generate --spec project.yml
-xcodebuild -project XISOStudio.xcodeproj \
-  -scheme XISOStudio \
-  -sdk iphonesimulator \
-  -configuration Debug \
-  -destination 'generic/platform=iOS Simulator' \
-  CODE_SIGNING_ALLOWED=NO build
-```
-
-## Next implementation step
-
-Integrate the upstream `extract-xiso` C engine behind a Swift wrapper, then connect each operation to the engine with progress reporting, cancellation, file validation, and safe output handling. Confirm upstream licensing and supported image formats before redistributing engine code.
+Review upstream licenses before redistributing binaries or source. Test image handling against known-good disc images before relying on output. Keep original images unless the user explicitly enables an operation that deletes them.
