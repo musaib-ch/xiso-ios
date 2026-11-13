@@ -39,6 +39,7 @@ private enum StudioStyle {
     static let muted = Color(red: 0.72, green: 0.76, blue: 0.70)
 }
 
+
 struct DashboardView: View {
     @EnvironmentObject private var engine: XisoEngine
     @State private var selectedOperation: StudioOperation?
@@ -46,100 +47,97 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 24) {
+                    HStack(alignment: .center) {
+                        VStack(alignment: .leading, spacing: 6) {
                             Text("XISO STUDIO")
                                 .font(.caption.weight(.bold))
-                                .tracking(1.8)
+                                .tracking(2)
                                 .foregroundStyle(StudioStyle.green)
-                            Text("Dashboard")
-                                .font(.system(size: 30, weight: .bold, design: .rounded))
+                            Text("Your workspace")
+                                .font(.system(size: 31, weight: .bold, design: .rounded))
                                 .foregroundStyle(.white)
                         }
                         Spacer()
-                        Image(systemName: "opticaldisc")
-                            .font(.system(size: 25, weight: .medium))
+                        Image(systemName: "opticaldisc.fill")
+                            .font(.system(size: 28, weight: .medium))
                             .foregroundStyle(StudioStyle.green)
-                            .frame(width: 48, height: 48)
-                            .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 15))
+                            .frame(width: 58, height: 58)
+                            .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+                            .accessibilityHidden(true)
                     }
 
-                    HStack(spacing: 8) {
-                        Circle()
-                            .fill(StudioStyle.green)
-                            .frame(width: 7, height: 7)
-                        Text(engine.busy ? "ENGINE WORKING" : "XISO ENGINE READY")
-                            .font(.system(size: 10, weight: .semibold, design: .monospaced))
-                            .tracking(0.5)
-                            .foregroundStyle(StudioStyle.green)
-                        Spacer()
-                        Text("LOCAL PROCESSING")
-                            .font(.system(size: 9, weight: .medium, design: .monospaced))
-                            .foregroundStyle(StudioStyle.muted)
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(StudioStyle.surface, in: Capsule())
-
-                    VStack(alignment: .leading, spacing: 12) {
-                        Label("Local file workflow", systemImage: "internaldrive")
-                            .font(.headline)
-                        Text("Choose source images and destination folders through the iOS Files picker. Storage usage is not guessed or fabricated.")
+                    VStack(alignment: .leading, spacing: 13) {
+                        HStack {
+                            Label(engine.busy ? "Processing now" : "Ready to work",
+                                  systemImage: engine.busy ? "arrow.triangle.2.circlepath" : "checkmark.circle.fill")
+                                .font(.headline)
+                                .foregroundStyle(StudioStyle.green)
+                            Spacer()
+                            Text("ON DEVICE")
+                                .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                                .foregroundStyle(StudioStyle.muted)
+                        }
+                        Text(engine.busy ? engine.status : "Select a tool to extract, create, or inspect an Xbox disc image.")
                             .font(.subheadline)
                             .foregroundStyle(StudioStyle.muted)
                             .fixedSize(horizontal: false, vertical: true)
+                        if engine.busy {
+                            HStack {
+                                ProgressView(value: engine.progress)
+                                    .tint(StudioStyle.green)
+                                Text("\(Int(engine.progress * 100))%")
+                                    .font(.caption.monospacedDigit().weight(.semibold))
+                                    .foregroundStyle(StudioStyle.green)
+                            }
+                        }
                     }
-                    .padding(16)
+                    .padding(18)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+                    .background(
+                        RoundedRectangle(cornerRadius: 20)
+                            .fill(StudioStyle.surface)
+                            .overlay(RoundedRectangle(cornerRadius: 20)
+                                .stroke(StudioStyle.green.opacity(engine.busy ? 0.45 : 0.16), lineWidth: 1))
+                    )
+
+                    VStack(alignment: .leading, spacing: 13) {
+                        Text("Quick actions")
+                            .font(.title3.bold())
+                            .foregroundStyle(.white)
+                        operationCard(.extract, featured: true)
+                        operationCard(.god, featured: true)
+                    }
 
                     VStack(alignment: .leading, spacing: 12) {
-                        Text("Start a new operation")
-                            .font(.headline)
-                        operationCard(.extract, featured: true)
-                        HStack(alignment: .top, spacing: 10) {
-                            operationCard(.create)
-                            operationCard(.list)
-                        }
+                        Text("More tools")
+                            .font(.title3.bold())
+                            .foregroundStyle(.white)
+                        operationCard(.create)
+                        operationCard(.list)
                         operationCard(.rewrite)
-                        operationCard(.god)
                     }
 
-                    VStack(alignment: .leading, spacing: 10) {
-                        HStack {
-                            Text("Current activity")
-                                .font(.headline)
-                            Spacer()
-                            Text(engine.busy ? "RUNNING" : "IDLE")
-                                .font(.system(size: 10, weight: .bold, design: .monospaced))
-                                .foregroundStyle(engine.busy ? StudioStyle.green : StudioStyle.muted)
-                        }
-                        if engine.busy {
-                            ProgressView(value: engine.progress)
-                                .tint(StudioStyle.green)
-                            Text(engine.status)
-                                .font(.subheadline)
-                                .foregroundStyle(StudioStyle.muted)
-                        } else {
-                            Label("No active operation", systemImage: "checkmark.circle")
-                                .font(.subheadline)
+                    HStack(alignment: .top, spacing: 12) {
+                        Image(systemName: "lock.shield")
+                            .font(.title3)
+                            .foregroundStyle(StudioStyle.green)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("Private, local processing")
+                                .font(.subheadline.weight(.semibold))
+                                .foregroundStyle(.white)
+                            Text("Choose files using the iOS document picker. Nothing is uploaded by XISO Studio.")
+                                .font(.caption)
                                 .foregroundStyle(StudioStyle.muted)
                         }
                     }
                     .padding(16)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
-
-                    Text("XISO Studio • Native SwiftUI")
-                        .font(.system(size: 11, weight: .medium, design: .monospaced))
-                        .foregroundStyle(StudioStyle.muted.opacity(0.75))
-                        .frame(maxWidth: .infinity)
-                        .padding(.vertical, 8)
+                    .background(StudioStyle.surface.opacity(0.8), in: RoundedRectangle(cornerRadius: 18))
                 }
-                .padding(16)
+                .padding(18)
             }
-            .background(StudioStyle.background)
+            .background(StudioStyle.background.ignoresSafeArea())
             .toolbar(.hidden, for: .navigationBar)
         }
         .sheet(item: $selectedOperation) { operation in
@@ -159,36 +157,125 @@ struct DashboardView: View {
     }
 
     private func operationCard(_ operation: StudioOperation, featured: Bool = false) -> some View {
-        Button {
-            selectedOperation = operation
-        } label: {
-            HStack(spacing: 12) {
+        Button { selectedOperation = operation } label: {
+            HStack(spacing: 14) {
                 Image(systemName: operation.symbol)
-                    .font(.system(size: featured ? 23 : 20, weight: .medium))
+                    .font(.system(size: featured ? 25 : 21, weight: .medium))
                     .foregroundStyle(StudioStyle.green)
-                    .frame(width: featured ? 48 : 42, height: featured ? 48 : 42)
-                    .background(StudioStyle.elevated, in: RoundedRectangle(cornerRadius: 12))
-                VStack(alignment: .leading, spacing: 4) {
+                    .frame(width: featured ? 58 : 50, height: featured ? 58 : 50)
+                    .background(StudioStyle.elevated, in: RoundedRectangle(cornerRadius: 15))
+                VStack(alignment: .leading, spacing: 5) {
                     Text(operation.rawValue)
-                        .font(featured ? .headline : .subheadline.weight(.semibold))
+                        .font(.headline)
                         .foregroundStyle(.white)
                     Text(operation.subtitle)
                         .font(.caption)
                         .foregroundStyle(StudioStyle.muted)
-                        .multilineTextAlignment(.leading)
                         .fixedSize(horizontal: false, vertical: true)
+                        .multilineTextAlignment(.leading)
                 }
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(StudioStyle.muted)
+                Spacer(minLength: 6)
+                Image(systemName: "arrow.up.right")
+                    .font(.footnote.weight(.bold))
+                    .foregroundStyle(StudioStyle.green)
+                    .frame(width: 30, height: 30)
+                    .background(StudioStyle.elevated, in: Circle())
             }
-            .padding(14)
+            .padding(15)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 16))
-            .contentShape(RoundedRectangle(cornerRadius: 16))
+            .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 20))
         }
         .buttonStyle(.plain)
+        .accessibilityHint("Opens \(operation.rawValue) tool")
+    }
+}
+
+struct OperationScaffold<Content: View>: View {
+    @Environment(\.dismiss) private var dismiss
+    let title: String
+    let subtitle: String
+    let symbol: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    HStack(spacing: 14) {
+                        Image(systemName: symbol)
+                            .font(.system(size: 28))
+                            .foregroundStyle(StudioStyle.green)
+                            .frame(width: 58, height: 58)
+                            .background(StudioStyle.elevated, in: RoundedRectangle(cornerRadius: 18))
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(title)
+                                .font(.system(size: 27, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text(subtitle)
+                                .font(.subheadline)
+                                .foregroundStyle(StudioStyle.muted)
+                        }
+                    }
+                    .padding(.bottom, 6)
+                    content
+                }
+                .padding(18)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .background(StudioStyle.background.ignoresSafeArea())
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }
+                        .foregroundStyle(StudioStyle.green)
+                }
+            }
+        }
+        .presentationDragIndicator(.visible)
+    }
+}
+
+struct StudioSection<Content: View>: View {
+    let heading: String
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            Text(heading.uppercased())
+                .font(.caption.weight(.bold))
+                .tracking(1)
+                .foregroundStyle(StudioStyle.muted)
+            content
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 20))
+    }
+}
+
+struct StudioActionButton: View {
+    let title: String
+    let symbol: String
+    let disabled: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                Text(title)
+                Spacer()
+                Image(systemName: "arrow.right")
+            }
+            .font(.headline)
+            .padding(17)
+            .foregroundStyle(.black)
+            .background(disabled ? StudioStyle.muted : StudioStyle.green,
+                        in: RoundedRectangle(cornerRadius: 16))
+        }
+        .buttonStyle(.plain)
+        .disabled(disabled)
+        .accessibilityHint(disabled ? "Select the required files first" : "Starts processing on this device")
     }
 }
 
