@@ -267,132 +267,224 @@ jobs:
               }
           }
 
+
           struct PickRow: View {
               let label: String
               let types: [UTType]
               @Binding var url: URL?
               @State private var show = false
+              @State private var selectionError: String?
+
               var body: some View {
                   Button { show = true } label: {
-                      HStack {
-                          Text(label).foregroundStyle(.primary)
-                          Spacer()
-                          Text(url?.lastPathComponent ?? "Choose…").foregroundStyle(.secondary).lineLimit(1)
+                      HStack(spacing: 12) {
+                          Image(systemName: url == nil ? "folder.badge.plus" : "checkmark.circle.fill")
+                              .font(.title3)
+                              .foregroundStyle(Color(red: 0.47, green: 0.87, blue: 0.40))
+                              .frame(width: 36, height: 36)
+                              .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+                          VStack(alignment: .leading, spacing: 4) {
+                              Text(label)
+                                  .font(.subheadline.weight(.semibold))
+                                  .foregroundStyle(.white)
+                              Text(url?.lastPathComponent ?? "Tap to choose a file or folder")
+                                  .font(.caption)
+                                  .foregroundStyle(.secondary)
+                                  .lineLimit(2)
+                                  .multilineTextAlignment(.leading)
+                          }
+                          Spacer(minLength: 4)
+                          Image(systemName: "chevron.right")
+                              .foregroundStyle(.secondary)
+                      }
+                      .padding(12)
+                      .background(Color.white.opacity(0.055), in: RoundedRectangle(cornerRadius: 14))
+                  }
+                  .buttonStyle(.plain)
+                  .fileImporter(isPresented: $show, allowedContentTypes: types) { result in
+                      switch result {
+                      case .success(let selected): url = selected
+                      case .failure(let error): selectionError = error.localizedDescription
                       }
                   }
-                  .fileImporter(isPresented: $show, allowedContentTypes: types) { r in
-                      if case .success(let u) = r { url = u }
+                  .alert("File selection failed", isPresented: Binding(
+                      get: { selectionError != nil },
+                      set: { if !$0 { selectionError = nil } }
+                  )) {
+                      Button("OK", role: .cancel) { selectionError = nil }
+                  } message: {
+                      Text(selectionError ?? "")
                   }
               }
           }
 
           struct ExtractView: View {
-              @EnvironmentObject var engine: XisoEngine
+              @EnvironmentObject private var engine: XisoEngine
               @State private var iso: URL?
               @State private var dest: URL?
               @State private var skip = false
+
               var body: some View {
-                  NavigationStack {
-                      Form {
-                          PickRow(label: "ISO", types: [.data], url: $iso)
-                          PickRow(label: "Destination", types: [.folder], url: $dest)
+                  OperationScaffold(title: "Extract ISO", subtitle: "Unpack your disc image into a folder", symbol: "archivebox") {
+                      StudioSection(heading: "Choose files") {
+                          PickRow(label: "Source ISO image", types: [.data], url: $iso)
+                          PickRow(label: "Destination folder", types: [.folder], url: $dest)
+                      }
+                      StudioSection(heading: "Options") {
                           Toggle("Skip $SystemUpdate", isOn: $skip)
-                          Text("Xbox 360 discs: the extracted folder contains default.xex — open that in Xenia.")
-                              .font(.footnote).foregroundStyle(.secondary)
-                          Button("Extract") { if let i = iso, let d = dest { engine.extract(iso: i, dest: d, skipSystemUpdate: skip) } }
-                              .disabled(iso == nil || dest == nil || engine.busy)
-                          OperationProgressCard()
-                      }.navigationTitle("Extract")
+                              .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
+                          Text("Xbox 360 game folders typically contain default.xex.")
+                              .font(.caption)
+                              .foregroundStyle(.secondary)
+                      }
+                      StudioActionButton(title: "Start extraction", symbol: "archivebox",
+                                         disabled: iso == nil || dest == nil || engine.busy) {
+                          if let i = iso, let d = dest {
+                              engine.extract(iso: i, dest: d, skipSystemUpdate: skip)
+                          }
+                      }
+                      OperationProgressCard()
                   }
               }
           }
 
           struct CreateView: View {
-              @EnvironmentObject var engine: XisoEngine
+              @EnvironmentObject private var engine: XisoEngine
               @State private var src: URL?
               @State private var outDir: URL?
               @State private var name = "game.iso"
               @State private var media = true
+
               var body: some View {
-                  NavigationStack {
-                      Form {
-                          PickRow(label: "Source folder", types: [.folder], url: $src)
+                  OperationScaffold(title: "Create XISO", subtitle: "Build a disc image from game files", symbol: "opticaldisc") {
+                      StudioSection(heading: "Choose files") {
+                          PickRow(label: "Source game folder", types: [.folder], url: $src)
                           PickRow(label: "Output folder", types: [.folder], url: $outDir)
-                          TextField("Output name", text: $name).autocorrectionDisabled().textInputAutocapitalization(.never)
+                      }
+                      StudioSection(heading: "Output settings") {
+                          VStack(alignment: .leading, spacing: 8) {
+                              Text("File name").font(.subheadline.weight(.medium))
+                              TextField("game.iso", text: $name)
+                                  .textInputAutocapitalization(.never)
+                                  .autocorrectionDisabled()
+                                  .padding(12)
+                                  .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+                          }
                           Toggle("Media-enable patch", isOn: $media)
-                          Button("Create") {
-                              if let s = src, let o = outDir { engine.create(src: s, outISO: o.appendingPathComponent(name), mediaEnable: media) }
-                          }.disabled(src == nil || outDir == nil || name.isEmpty || engine.busy)
-                          OperationProgressCard()
-                      }.navigationTitle("Create")
+                              .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
+                      }
+                      StudioActionButton(title: "Create image", symbol: "opticaldisc",
+                                         disabled: src == nil || outDir == nil || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || engine.busy) {
+                          if let s = src, let o = outDir {
+                              engine.create(src: s, outISO: o.appendingPathComponent(name), mediaEnable: media)
+                          }
+                      }
+                      OperationProgressCard()
                   }
               }
           }
 
           struct ListView: View {
-              @EnvironmentObject var engine: XisoEngine
+              @EnvironmentObject private var engine: XisoEngine
               @State private var iso: URL?
+
               var body: some View {
-                  NavigationStack {
-                      VStack {
-                          Form {
-                              PickRow(label: "ISO", types: [.data], url: $iso)
-                              Button("List contents") { if let i = iso { engine.list(iso: i) } }
-                                  .disabled(iso == nil || engine.busy)
-                          OperationProgressCard()
-                          }.frame(height: 150)
-                          List(engine.tree, children: \.children) { n in
-                              HStack {
-                                  Image(systemName: n.isDir ? "folder" : "doc")
-                                  Text(n.name)
-                                  Spacer()
-                                  if !n.isDir { Text(ByteCountFormatter.string(fromByteCount: Int64(n.size), countStyle: .file)).foregroundStyle(.secondary).font(.caption) }
+                  OperationScaffold(title: "Browse ISO", subtitle: "Inspect files without extracting", symbol: "list.tree") {
+                      StudioSection(heading: "Choose image") {
+                          PickRow(label: "Source ISO image", types: [.data], url: $iso)
+                      }
+                      StudioActionButton(title: "List contents", symbol: "list.bullet",
+                                         disabled: iso == nil || engine.busy) {
+                          if let i = iso { engine.list(iso: i) }
+                      }
+                      OperationProgressCard()
+                      if !engine.tree.isEmpty {
+                          StudioSection(heading: "Image contents") {
+                              OutlineGroup(engine.tree, children: \.children) { node in
+                                  HStack(spacing: 8) {
+                                      Image(systemName: node.isDir ? "folder.fill" : "doc")
+                                          .foregroundStyle(Color(red: 0.47, green: 0.87, blue: 0.40))
+                                      Text(node.name)
+                                          .font(.subheadline)
+                                          .lineLimit(2)
+                                      Spacer(minLength: 4)
+                                      if !node.isDir {
+                                          Text(ByteCountFormatter.string(fromByteCount: Int64(node.size), countStyle: .file))
+                                              .font(.caption2)
+                                              .foregroundStyle(.secondary)
+                                      }
+                                  }
+                                  .padding(.vertical, 3)
                               }
                           }
-                      }.navigationTitle("List")
+                      } else if !engine.busy {
+                          Text("Choose an image and tap List contents to browse its files.")
+                              .font(.footnote)
+                              .foregroundStyle(.secondary)
+                      }
                   }
               }
           }
 
           struct RewriteView: View {
-              @EnvironmentObject var engine: XisoEngine
+              @EnvironmentObject private var engine: XisoEngine
               @State private var iso: URL?
               @State private var dest: URL?
               @State private var del = false
+
               var body: some View {
-                  NavigationStack {
-                      Form {
-                          PickRow(label: "ISO", types: [.data], url: $iso)
+                  OperationScaffold(title: "Rewrite ISO", subtitle: "Rebuild a disc image", symbol: "wand.and.stars") {
+                      StudioSection(heading: "Choose files") {
+                          PickRow(label: "Source ISO image", types: [.data], url: $iso)
                           PickRow(label: "Output folder (optional)", types: [.folder], url: $dest)
+                      }
+                      StudioSection(heading: "Safety options") {
                           Toggle("Delete original after rewrite", isOn: $del)
-                          Button("Rewrite") { if let i = iso { engine.rewrite(iso: i, dest: dest, deleteOld: del) } }
-                              .disabled(iso == nil || engine.busy)
-                          OperationProgressCard()
-                      }.navigationTitle("Rewrite")
+                              .tint(.orange)
+                          if del {
+                              Label("The original image will be removed after rewriting. Keep a backup.",
+                                    systemImage: "exclamationmark.triangle")
+                                  .font(.caption)
+                                  .foregroundStyle(.orange)
+                          }
+                      }
+                      StudioActionButton(title: "Rewrite image", symbol: "wand.and.stars",
+                                         disabled: iso == nil || engine.busy) {
+                          if let i = iso { engine.rewrite(iso: i, dest: dest, deleteOld: del) }
+                      }
+                      OperationProgressCard()
                   }
               }
           }
 
           struct GodView: View {
-              @EnvironmentObject var engine: XisoEngine
+              @EnvironmentObject private var engine: XisoEngine
               @State private var iso: URL?
               @State private var dest: URL?
               @State private var trim = true
+
               var body: some View {
-                  NavigationStack {
-                      Form {
-                          PickRow(label: "ISO", types: [.data], url: $iso)
+                  OperationScaffold(title: "Convert to GOD", subtitle: "Create an Xbox Games on Demand package", symbol: "externaldrive") {
+                      StudioSection(heading: "Choose files") {
+                          PickRow(label: "Source ISO image", types: [.data], url: $iso)
                           PickRow(label: "Output folder", types: [.folder], url: $dest)
+                      }
+                      StudioSection(heading: "Conversion settings") {
                           Toggle("Trim unused space", isOn: $trim)
-                          Text("Creates a Games on Demand package (TitleID/00007000/…) from an Xbox 360 ISO. Needs free space roughly equal to the ISO.")
-                              .font(.footnote).foregroundStyle(.secondary)
-                          Button("Convert to GOD") { if let i = iso, let d = dest { engine.toGOD(iso: i, dest: d, trim: trim) } }
-                              .disabled(iso == nil || dest == nil || engine.busy)
-                          OperationProgressCard()
-                      }.navigationTitle("ISO → GOD")
+                              .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
+                          Text("The conversion needs available storage approximately equal to the source image size.")
+                              .font(.caption)
+                              .foregroundStyle(.secondary)
+                      }
+                      StudioActionButton(title: "Convert to GOD", symbol: "externaldrive",
+                                         disabled: iso == nil || dest == nil || engine.busy) {
+                          if let i = iso, let d = dest { engine.toGOD(iso: i, dest: d, trim: trim) }
+                      }
+                      OperationProgressCard()
                   }
               }
           }
+
           XISO_EOF
           mkdir -p Sources/CXiso
           cat > Sources/CXiso/XisoBridge.h <<'XISO_EOF'
