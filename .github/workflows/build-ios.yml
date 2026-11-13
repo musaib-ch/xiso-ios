@@ -270,6 +270,7 @@ jobs:
                   }
                   .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
                   .preferredColorScheme(.dark)
+                  .fullScreenCover(isPresented: $showingMonitor) { ProcessingMonitorView() }
               }
           }
 
