@@ -306,3 +306,65 @@ struct SettingsLibraryView: View {
         }
     }
 }
+
+
+struct OperationProgressCard: View {
+    @EnvironmentObject private var engine: XisoEngine
+    @State private var showDetails = false
+
+    var body: some View {
+        if engine.busy || engine.status != "Idle" {
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 10) {
+                    Image(systemName: engine.busy ? "arrow.triangle.2.circlepath" :
+                            (engine.status.localizedCaseInsensitiveContains("failed") ? "exclamationmark.triangle.fill" : "checkmark.circle.fill"))
+                        .foregroundStyle(StudioStyle.green)
+                    Text(engine.busy ? "Processing" : "Last operation")
+                        .font(.headline)
+                    Spacer()
+                    if engine.busy {
+                        Text("\(Int(engine.progress * 100))%")
+                            .font(.system(.subheadline, design: .monospaced, weight: .bold))
+                            .foregroundStyle(StudioStyle.green)
+                    }
+                }
+                ProgressView(value: engine.progress)
+                    .tint(StudioStyle.green)
+                Text(engine.status)
+                    .font(.subheadline)
+                    .foregroundStyle(StudioStyle.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack {
+                    Button {
+                        showDetails.toggle()
+                    } label: {
+                        Label(showDetails ? "Hide details" : "View details", systemImage: "list.bullet.rectangle")
+                    }
+                    .font(.subheadline.weight(.medium))
+                    Spacer()
+                    if engine.busy {
+                        Button("Cancel", role: .destructive) {
+                            engine.cancel()
+                        }.font(.subheadline.weight(.semibold))
+                    }
+                }
+                if showDetails {
+                    ScrollView {
+                        LazyVStack(alignment: .leading, spacing: 5) {
+                            ForEach(Array(engine.log.suffix(40).enumerated()), id: \.offset) { _, line in
+                                Text(line)
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 160)
+                    .textSelection(.enabled)
+                }
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+        }
+    }
+}
