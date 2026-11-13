@@ -396,7 +396,7 @@ jobs:
               @State private var iso: URL?
 
               var body: some View {
-                  OperationScaffold(title: "Browse ISO", subtitle: "Inspect files without extracting", symbol: "list.tree") {
+                  OperationScaffold(title: "Browse ISO", subtitle: "Inspect files without extracting", symbol: "doc.text.magnifyingglass") {
                       StudioSection(heading: "Choose image") {
                           PickRow(label: "Source ISO image", types: [.data], url: $iso)
                       }
