@@ -14,7 +14,7 @@ private enum StudioOperation: String, CaseIterable, Identifiable {
         switch self {
         case .extract: return "archivebox"
         case .create: return "opticaldisc"
-        case .list: return "list.tree"
+        case .list: return "doc.text.magnifyingglass"
         case .rewrite: return "wand.and.stars"
         case .god: return "externaldrive"
         }
@@ -426,7 +426,7 @@ struct OperationProgressCard: View {
                     Button {
                         showMonitor = true
                     } label: {
-                        Label("Open monitor", systemImage: "gauge.with.dots.needle.50percent")
+                        Label("Open monitor", systemImage: "speedometer")
                     }
                     .font(.subheadline.weight(.medium))
                     Button {
