@@ -99,6 +99,9 @@ jobs:
               @Published var status = "Idle"
               @Published var log: [String] = []
               @Published var tree: [XisoNode] = []
+              @Published var operationName = ""
+              @Published var startedAt: Date?
+              @Published var finishedAt: Date?
 
               private let queue = DispatchQueue(label: "xiso.engine")
               private var ctx: OpaquePointer?
@@ -125,6 +128,7 @@ jobs:
               private func run(_ title: String, scoped: [URL], _ work: @escaping (OpaquePointer) -> Int32) {
                   guard !busy else { return }
                   busy = true; progress = 0; status = title + "…"; log = []
+                  operationName = title; startedAt = Date(); finishedAt = nil
                   let accessed = scoped.filter { $0.startAccessingSecurityScopedResource() }
                   queue.async {
                       let c = xiso_context_create()!
@@ -140,6 +144,7 @@ jobs:
                       accessed.forEach { $0.stopAccessingSecurityScopedResource() }
                       DispatchQueue.main.async {
                           self.busy = false
+                          self.finishedAt = Date()
                           self.progress = rc == 0 ? 1 : self.progress
                           self.status = rc == 0
                               ? (files > 0
@@ -230,6 +235,7 @@ jobs:
           struct RootView: View {
               @EnvironmentObject var engine: XisoEngine
               @State private var activeTab = 0
+              @State private var showingMonitor = false
               var body: some View {
                   VStack(spacing: 0) {
                       TabView(selection: $activeTab) {
@@ -239,7 +245,7 @@ jobs:
                           SettingsLibraryView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(3)
                       }
                       if engine.busy {
-                          Button { activeTab = 2 } label: {
+                          Button { showingMonitor = true } label: {
                               HStack(spacing: 10) {
                                   Image(systemName: "arrow.triangle.2.circlepath")
                                       .foregroundStyle(.green)
@@ -259,7 +265,7 @@ jobs:
                               .background(.ultraThinMaterial)
                           }
                           .buttonStyle(.plain)
-                          .accessibilityLabel("Open activity and extraction progress")
+                          .accessibilityLabel("Open full screen processing monitor")
                       }
                   }
                   .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
