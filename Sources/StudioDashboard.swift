@@ -398,6 +398,7 @@ struct SettingsLibraryView: View {
 struct OperationProgressCard: View {
     @EnvironmentObject private var engine: XisoEngine
     @State private var showDetails = false
+    @State private var showMonitor = false
 
     var body: some View {
         if engine.busy || engine.status != "Idle" {
@@ -422,6 +423,12 @@ struct OperationProgressCard: View {
                     .foregroundStyle(StudioStyle.muted)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
+                    Button {
+                        showMonitor = true
+                    } label: {
+                        Label("Open monitor", systemImage: "gauge.with.dots.needle.50percent")
+                    }
+                    .font(.subheadline.weight(.medium))
                     Button {
                         showDetails.toggle()
                     } label: {
@@ -452,6 +459,171 @@ struct OperationProgressCard: View {
             .padding(16)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+            .fullScreenCover(isPresented: $showMonitor) { ProcessingMonitorView() }
         }
+    }
+}
+
+
+struct ProcessingMonitorView: View {
+    @EnvironmentObject private var engine: XisoEngine
+    @Environment(\.dismiss) private var dismiss
+    @State private var showLog = false
+    @State private var confirmCancel = false
+
+    private let accent = Color(red: 0.47, green: 0.87, blue: 0.40)
+
+    var body: some View {
+        NavigationStack {
+            TimelineView(.periodic(from: .now, by: 1)) { timeline in
+                let elapsed = max(0, (engine.finishedAt ?? timeline.date).timeIntervalSince(engine.startedAt ?? timeline.date))
+                let fraction = min(max(engine.progress, 0), 1)
+                let ratePerMinute = elapsed > 0 ? fraction / elapsed * 6000 : 0
+                let estimate = fraction >= 0.05 && fraction < 0.99 && elapsed >= 5 && engine.busy
+                    ? elapsed * (1 - fraction) / fraction : nil
+
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        VStack(spacing: 10) {
+                            Image(systemName: engine.busy ? "opticaldisc.fill" : "checkmark.circle.fill")
+                                .font(.system(size: 64))
+                                .foregroundStyle(accent)
+                                .frame(width: 118, height: 118)
+                                .background(accent.opacity(0.1), in: Circle())
+                            Text(engine.busy ? "Processing your image" : "Operation summary")
+                                .font(.system(size: 26, weight: .bold, design: .rounded))
+                                .foregroundStyle(.white)
+                            Text(engine.operationName.isEmpty ? "XISO Studio" : engine.operationName)
+                                .font(.subheadline.weight(.medium))
+                                .foregroundStyle(.secondary)
+                            Text(engine.status)
+                                .font(.subheadline)
+                                .foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 16)
+
+                        VStack(spacing: 13) {
+                            Text("\(Int(fraction * 100))%")
+                                .font(.system(size: 66, weight: .bold, design: .rounded))
+                                .monospacedDigit()
+                                .foregroundStyle(.white)
+                                .contentTransition(.numericText())
+                            ProgressView(value: fraction)
+                                .tint(accent)
+                                .scaleEffect(x: 1, y: 2, anchor: .center)
+                                .accessibilityLabel("Processing progress")
+                            Text(engine.busy ? "IN PROGRESS" : "LAST OPERATION")
+                                .font(.caption.weight(.bold))
+                                .tracking(1.5)
+                                .foregroundStyle(accent)
+                        }
+                        .padding(22)
+                        .frame(maxWidth: .infinity)
+                        .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 22))
+
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 12) {
+                            metric("Elapsed", value: Self.duration(elapsed), symbol: "clock")
+                            metric("Remaining", value: estimate.map { "~" + Self.duration($0) } ?? "Calculating", symbol: "hourglass")
+                            metric("Average speed", value: elapsed >= 5 && fraction > 0 ? String(format: "%.1f%%/min", ratePerMinute) : "Calculating", symbol: "speedometer")
+                            metric("Progress", value: "\(Int(fraction * 100))%", symbol: "chart.line.uptrend.xyaxis")
+                        }
+
+                        Text("Remaining time is estimated from overall progress, and may change between processing stages. Speed is measured in percentage points per minute, not data throughput.")
+                            .font(.caption)
+                            .foregroundStyle(StudioStyle.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+
+                        VStack(alignment: .leading, spacing: 12) {
+                            Button {
+                                withAnimation { showLog.toggle() }
+                            } label: {
+                                HStack {
+                                    Label("Processing log", systemImage: "terminal")
+                                        .font(.headline)
+                                    Spacer()
+                                    Text("\(engine.log.count) entries")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Image(systemName: showLog ? "chevron.up" : "chevron.down")
+                                        .font(.caption)
+                                }
+                                .foregroundStyle(.white)
+                            }
+                            .buttonStyle(.plain)
+                            if showLog {
+                                ScrollView {
+                                    LazyVStack(alignment: .leading, spacing: 6) {
+                                        ForEach(Array(engine.log.suffix(80).enumerated()), id: \.offset) { _, entry in
+                                            Text(entry)
+                                                .font(.system(size: 11, design: .monospaced))
+                                                .frame(maxWidth: .infinity, alignment: .leading)
+                                        }
+                                    }
+                                }
+                                .frame(maxHeight: 230)
+                                .textSelection(.enabled)
+                            }
+                        }
+                        .padding(18)
+                        .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 18))
+
+                        if engine.busy {
+                            Button(role: .destructive) { confirmCancel = true } label: {
+                                Label("Cancel operation", systemImage: "xmark.circle")
+                                    .font(.headline)
+                                    .frame(maxWidth: .infinity)
+                                    .padding(14)
+                            }
+                            .buttonStyle(.bordered)
+                            .confirmationDialog("Cancel the running operation?", isPresented: $confirmCancel) {
+                                Button("Cancel operation", role: .destructive) { engine.cancel() }
+                            } message: {
+                                Text("Incomplete output files may remain at the destination.")
+                            }
+                        }
+                    }
+                    .padding(18)
+                }
+            }
+            .background(StudioStyle.background.ignoresSafeArea())
+            .navigationTitle("Processing monitor")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .navigationBarTrailing) {
+                    Button("Done") { dismiss() }.foregroundStyle(accent)
+                }
+            }
+        }
+        .preferredColorScheme(.dark)
+    }
+
+    private func metric(_ title: String, value: String, symbol: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label(title, systemImage: symbol)
+                .font(.caption)
+                .foregroundStyle(StudioStyle.muted)
+            Text(value)
+                .font(.system(.title3, design: .rounded, weight: .bold))
+                .monospacedDigit()
+                .minimumScaleFactor(0.7)
+                .lineLimit(1)
+                .foregroundStyle(.white)
+        }
+        .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+        .padding(16)
+        .background(StudioStyle.surface, in: RoundedRectangle(cornerRadius: 17))
+    }
+
+    private static func duration(_ seconds: TimeInterval) -> String {
+        let value = Int(max(0, min(seconds, 86_400_000)))
+        let hours = value / 3600
+        let minutes = (value % 3600) / 60
+        let remaining = value % 60
+        return hours > 0
+            ? String(format: "%dh %02dm", hours, minutes)
+            : String(format: "%02d:%02d", minutes, remaining)
     }
 }
