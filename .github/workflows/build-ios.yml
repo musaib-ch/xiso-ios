@@ -33,6 +33,7 @@ jobs:
                 - path: Sources/XisoApp.swift
                 - path: Sources/XisoEngine.swift
                 - path: Sources/StudioDashboard.swift
+                - path: Sources/Assets.xcassets
                 - path: Sources/CXiso
               settings:
                 base:
@@ -51,7 +52,8 @@ jobs:
                   CODE_SIGNING_ALLOWED: NO
                   CODE_SIGN_IDENTITY: ""
                   GENERATE_INFOPLIST_FILE: YES
-                  INFOPLIST_KEY_CFBundleDisplayName: "XISO GUI"
+                  INFOPLIST_KEY_CFBundleDisplayName: "XISO Studio"
+                  ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
                   INFOPLIST_KEY_UILaunchScreen_Generation: YES
                   INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
                   INFOPLIST_KEY_UIFileSharingEnabled: YES
@@ -227,47 +229,41 @@ jobs:
 
           struct RootView: View {
               @EnvironmentObject var engine: XisoEngine
+              @State private var activeTab = 0
               var body: some View {
                   VStack(spacing: 0) {
-                      TabView {
-                          DashboardView().tabItem { Label("Home", systemImage: "opticaldisc") }
-                          FilesLibraryView().tabItem { Label("Files", systemImage: "folder") }
-                          ActivityLibraryView().tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }
-                          SettingsLibraryView().tabItem { Label("Settings", systemImage: "gearshape") }
+                      TabView(selection: $activeTab) {
+                          DashboardView().tabItem { Label("Home", systemImage: "opticaldisc") }.tag(0)
+                          FilesLibraryView().tabItem { Label("Files", systemImage: "folder") }.tag(1)
+                          ActivityLibraryView().tabItem { Label("Activity", systemImage: "list.bullet.rectangle") }.tag(2)
+                          SettingsLibraryView().tabItem { Label("Settings", systemImage: "gearshape") }.tag(3)
                       }
-                      StatusBar()
+                      if engine.busy {
+                          Button { activeTab = 2 } label: {
+                              HStack(spacing: 10) {
+                                  Image(systemName: "arrow.triangle.2.circlepath")
+                                      .foregroundStyle(.green)
+                                  VStack(alignment: .leading, spacing: 4) {
+                                      HStack {
+                                          Text(engine.status).font(.footnote.weight(.semibold)).lineLimit(1)
+                                          Spacer()
+                                          Text("\(Int(engine.progress * 100))%")
+                                              .font(.system(.caption, design: .monospaced, weight: .bold))
+                                      }
+                                      ProgressView(value: engine.progress).tint(.green)
+                                  }
+                                  Image(systemName: "chevron.up").font(.caption)
+                              }
+                              .padding(.horizontal, 16)
+                              .padding(.vertical, 11)
+                              .background(.ultraThinMaterial)
+                          }
+                          .buttonStyle(.plain)
+                          .accessibilityLabel("Open activity and extraction progress")
+                      }
                   }
                   .tint(Color(red: 0.47, green: 0.87, blue: 0.40))
                   .preferredColorScheme(.dark)
-              }
-          }
-
-          struct StatusBar: View {
-              @EnvironmentObject var engine: XisoEngine
-              var body: some View {
-                  VStack(alignment: .leading, spacing: 6) {
-                      ProgressView(value: engine.progress)
-                      HStack {
-                          Text(engine.status).font(.footnote).lineLimit(2)
-                          Spacer()
-                          if engine.busy { Button("Cancel", role: .destructive) { engine.cancel() }.font(.footnote) }
-                      }
-                      if !engine.log.isEmpty {
-                          ScrollViewReader { proxy in
-                              ScrollView {
-                                  LazyVStack(alignment: .leading, spacing: 2) {
-                                      ForEach(Array(engine.log.enumerated()), id: \.offset) { i, l in
-                                          Text(l).font(.system(size: 11, design: .monospaced)).id(i)
-                                      }
-                                  }.frame(maxWidth: .infinity, alignment: .leading)
-                              }
-                              .frame(height: 90)
-                              .onChange(of: engine.log.count) { n in proxy.scrollTo(n - 1, anchor: .bottom) }
-                          }
-                      }
-                  }
-                  .padding(10)
-                  .background(.bar)
               }
           }
 
@@ -305,6 +301,7 @@ jobs:
                               .font(.footnote).foregroundStyle(.secondary)
                           Button("Extract") { if let i = iso, let d = dest { engine.extract(iso: i, dest: d, skipSystemUpdate: skip) } }
                               .disabled(iso == nil || dest == nil || engine.busy)
+                          OperationProgressCard()
                       }.navigationTitle("Extract")
                   }
               }
@@ -326,6 +323,7 @@ jobs:
                           Button("Create") {
                               if let s = src, let o = outDir { engine.create(src: s, outISO: o.appendingPathComponent(name), mediaEnable: media) }
                           }.disabled(src == nil || outDir == nil || name.isEmpty || engine.busy)
+                          OperationProgressCard()
                       }.navigationTitle("Create")
                   }
               }
@@ -341,6 +339,7 @@ jobs:
                               PickRow(label: "ISO", types: [.data], url: $iso)
                               Button("List contents") { if let i = iso { engine.list(iso: i) } }
                                   .disabled(iso == nil || engine.busy)
+                          OperationProgressCard()
                           }.frame(height: 150)
                           List(engine.tree, children: \.children) { n in
                               HStack {
@@ -368,6 +367,7 @@ jobs:
                           Toggle("Delete original after rewrite", isOn: $del)
                           Button("Rewrite") { if let i = iso { engine.rewrite(iso: i, dest: dest, deleteOld: del) } }
                               .disabled(iso == nil || engine.busy)
+                          OperationProgressCard()
                       }.navigationTitle("Rewrite")
                   }
               }
@@ -388,6 +388,7 @@ jobs:
                               .font(.footnote).foregroundStyle(.secondary)
                           Button("Convert to GOD") { if let i = iso, let d = dest { engine.toGOD(iso: i, dest: d, trim: trim) } }
                               .disabled(iso == nil || dest == nil || engine.busy)
+                          OperationProgressCard()
                       }.navigationTitle("ISO → GOD")
                   }
               }
@@ -654,6 +655,44 @@ jobs:
           rustup toolchain install stable --profile minimal --target aarch64-apple-ios
           rustup default stable
           cargo build --release --target aarch64-apple-ios --manifest-path godffi/Cargo.toml
+
+      - name: Generate XISO Studio app icon
+        run: |
+          mkdir -p Sources/Assets.xcassets/AppIcon.appiconset
+          cat > /tmp/generate-xiso-icon.swift <<'ICON_SWIFT'
+          import AppKit
+          let size = 1024
+          let image = NSImage(size: NSSize(width: size, height: size))
+          image.lockFocus()
+          let rect = NSRect(x: 0, y: 0, width: size, height: size)
+          NSColor(calibratedRed: 0.055, green: 0.075, blue: 0.085, alpha: 1).setFill()
+          NSBezierPath(rect: rect).fill()
+          let center = NSPoint(x: 512, y: 530)
+          let ring = NSBezierPath(ovalIn: NSRect(x: 182, y: 200, width: 660, height: 660))
+          ring.lineWidth = 76
+          NSColor(calibratedRed: 0.42, green: 0.91, blue: 0.39, alpha: 1).setStroke()
+          ring.stroke()
+          NSColor(calibratedRed: 0.16, green: 0.29, blue: 0.22, alpha: 1).setFill()
+          NSBezierPath(ovalIn: NSRect(x: 322, y: 340, width: 380, height: 380)).fill()
+          NSColor(calibratedRed: 0.70, green: 1.0, blue: 0.66, alpha: 1).setFill()
+          NSBezierPath(ovalIn: NSRect(x: 470, y: 488, width: 84, height: 84)).fill()
+          let xFont = NSFont.systemFont(ofSize: 214, weight: .black)
+          let attrs: [NSAttributedString.Key: Any] = [.font: xFont, .foregroundColor: NSColor.white]
+          let x = "X" as NSString
+          let box = x.size(withAttributes: attrs)
+          x.draw(at: NSPoint(x: center.x - box.width / 2, y: 58), withAttributes: attrs)
+          image.unlockFocus()
+          guard let tiff = image.tiffRepresentation,
+                let bitmap = NSBitmapImageRep(data: tiff),
+                let png = bitmap.representation(using: .png, properties: [:]) else {
+              fatalError("Unable to encode icon")
+          }
+          try png.write(to: URL(fileURLWithPath: "Sources/Assets.xcassets/AppIcon.appiconset/AppIcon.png"))
+          ICON_SWIFT
+          swift /tmp/generate-xiso-icon.swift
+          cat > Sources/Assets.xcassets/AppIcon.appiconset/Contents.json <<'ICON_JSON'
+          {"images":[{"filename":"AppIcon.png","idiom":"universal","platform":"ios","size":"1024x1024"}],"info":{"author":"xcode","version":1}}
+          ICON_JSON
       - name: Install XcodeGen and generate project
         run: |
           brew install xcodegen
